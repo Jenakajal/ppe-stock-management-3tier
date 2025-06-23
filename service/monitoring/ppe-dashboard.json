@@ -1,0 +1,24 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "PPE Stock Monitoring",
+    "panels": [
+      {
+        "type": "graph",
+        "title": "PPE App Uptime",
+        "targets": [
+          {
+            "expr": "up",
+            "legendFormat": "{{instance}}",
+            "refId": "A"
+          }
+        ]
+      }
+    ],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 0
+  },
+  "overwrite": true
+}
+

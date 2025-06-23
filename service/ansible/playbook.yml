@@ -1,0 +1,36 @@
+---
+- name: Setup PPE App on nodes
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Update apt/yum packages
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install Docker (if not already installed)
+      package:
+        name: docker
+        state: present
+
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Pull latest app images (optional)
+      shell: docker pull "{{ item }}"
+      loop:
+        - "<your-ecr-uri>/ppe-stock-management-3tier-dashboard:latest"
+        - "<your-ecr-uri>/ppe-stock-management-3tier-view-stock:latest"
+        - "<your-ecr-uri>/ppe-stock-management-3tier-logout:latest"
+
+    - name: Run containers (optional — if managing locally)
+      shell: docker run -d --name {{ item.name }} -p {{ item.port }}:80 {{ item.image }}
+      loop:
+        - { name: 'dashboard', port: 8081, image: '<your-ecr-uri>/ppe-stock-management-3tier-dashboard:latest' }
+        - { name: 'view-stock', port: 8082, image: '<your-ecr-uri>/ppe-stock-management-3tier-view-stock:latest' }
+        - { name: 'logout', port: 8083, image: '<your-ecr-uri>/ppe-stock-management-3tier-logout:latest' }
+
