@@ -1,136 +1,136 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    AWS_REGION = 'ap-south-1'
-    PROJECT = 'ppe-stock-management-3tier'
-    SONARQUBE = 'SonarQube'   // Jenkins global config name
-    ECR_REGISTRY = credentials('ecr-registry') // Custom secret (store ECR URI here)
-  }
-
-  options {
-    skipDefaultCheckout()
-  }
-
-  stages {
-
-    stage('Clone Repository') {
-      steps {
-        git branch: 'main', url: 'https://github.com/Jenakajal/ppe-stock-management-3tier.git'
-      }
+    environment {
+        PROJECT = "ppe-stock-management-3tier"
+        REGION = "ap-south-1"
+        ECR_REPO = "ppe-ecr"
     }
 
-    stage('SonarQube Scan') {
-      environment {
-        SONAR_TOKEN = credentials('sonar-auth-token')
-      }
-      steps {
-        withSonarQubeEnv("${SONARQUBE}") {
-          script {
-            def services = ['dashboard', 'view-stock', 'logout']
-            for (svc in services) {
-              sh """
-                cd services/${svc}
-                sonar-scanner \
-                  -Dsonar.projectKey=${PROJECT}-${svc} \
-                  -Dsonar.sources=. \
-                  -Dsonar.host.url=\$SONAR_HOST_URL \
-                  -Dsonar.login=\$SONAR_TOKEN
-              """
+    options {
+        skipDefaultCheckout true
+    }
+
+    parameters {
+        booleanParam(name: 'ENABLE_SONARQUBE', defaultValue: true, description: 'Run SonarQube Analysis?')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
             }
-          }
         }
-      }
-    }
 
-    stage('Docker Build & Tag') {
-      steps {
-        script {
-          def services = ['dashboard', 'view-stock', 'logout']
-          for (svc in services) {
-            sh """
-              docker build -t ${PROJECT}-${svc}:latest ./services/${svc}
-              docker tag ${PROJECT}-${svc}:latest \$ECR_REGISTRY/${PROJECT}-${svc}:latest
-            """
-          }
+        stage('Terraform Init & Apply') {
+            steps {
+                dir('infrastructure/modules') {
+                    withCredentials([
+                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                    ]) {
+                        sh '''
+                            terraform init
+                            terraform apply -auto-approve
+                        '''
+                    }
+                }
+            }
         }
-      }
-    }
 
-    stage('Trivy Scan') {
-      steps {
-        script {
-          def services = ['dashboard', 'view-stock', 'logout']
-          for (svc in services) {
-            sh "trivy image --severity HIGH,CRITICAL ${PROJECT}-${svc}:latest || true"
-          }
+        stage('SonarQube Analysis') {
+            when {
+                expression { return params.ENABLE_SONARQUBE }
+            }
+            steps {
+                withCredentials([string(credentialsId: 'SONARQUBE_TOKEN', variable: 'SONAR_TOKEN')]) {
+                    sh '''
+                        cd infrastructure/microservices/dashboard
+                        sonar-scanner \
+                          -Dsonar.projectKey=dashboard \
+                          -Dsonar.sources=. \
+                          -Dsonar.host.url=http://localhost:9000 \
+                          -Dsonar.login=$SONAR_TOKEN
+                        cd ../view-stock
+                        sonar-scanner \
+                          -Dsonar.projectKey=view-stock \
+                          -Dsonar.sources=. \
+                          -Dsonar.host.url=http://localhost:9000 \
+                          -Dsonar.login=$SONAR_TOKEN
+                        cd ../logout
+                        sonar-scanner \
+                          -Dsonar.projectKey=logout \
+                          -Dsonar.sources=. \
+                          -Dsonar.host.url=http://localhost:9000 \
+                          -Dsonar.login=$SONAR_TOKEN
+                    '''
+                }
+            }
         }
-      }
-    }
 
-    stage('Push to ECR') {
-      environment {
-        AWS_ACCESS_KEY_ID = credentials('aws-access-key')
-        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-key')
-      }
-      steps {
-        script {
-          sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin \$ECR_REGISTRY"
-          def services = ['dashboard', 'view-stock', 'logout']
-          for (svc in services) {
-            sh "docker push \$ECR_REGISTRY/${PROJECT}-${svc}:latest"
-          }
+        stage('Build & Push to ECR') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                ]) {
+                    sh '''
+                        aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin <your-account-id>.dkr.ecr.$REGION.amazonaws.com
+
+                        for SERVICE in dashboard view-stock logout
+                        do
+                            cd infrastructure/microservices/$SERVICE
+                            docker build -t $SERVICE .
+                            docker tag $SERVICE:latest <your-account-id>.dkr.ecr.$REGION.amazonaws.com/$ECR_REPO:$SERVICE
+                            docker push <your-account-id>.dkr.ecr.$REGION.amazonaws.com/$ECR_REPO:$SERVICE
+                            cd -
+                        done
+                    '''
+                }
+            }
         }
-      }
-    }
 
-    stage('Terraform Infra Apply') {
-      steps {
-        dir('infrastructure') {
-          sh '''
-            terraform init
-            terraform validate
-            terraform apply -auto-approve
-          '''
+        stage('Deploy to EKS') {
+            steps {
+                sh '''
+                    for SERVICE in dashboard view-stock logout
+                    do
+                        kubectl apply -f k8-manifests/$SERVICE/deployment.yaml
+                    done
+                '''
+            }
         }
-      }
-    }
 
-    stage('Update Kubeconfig') {
-      steps {
-        sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${PROJECT}-eks"
-      }
-    }
-
-    stage('Deploy to EKS') {
-      steps {
-        script {
-          def services = ['dashboard', 'view-stock', 'logout']
-          for (svc in services) {
-            sh "kubectl apply -f services/k8-manifests/${svc}/deployment.yaml"
-          }
+        stage('Ansible Configs') {
+            steps {
+                dir('services/ansible') {
+                    sh 'ansible-playbook -i inventory.ini playbook.yml'
+                }
+            }
         }
-      }
+
+        stage('Monitoring Setup') {
+            steps {
+                dir('services/monitoring') {
+                    sh '''
+                        echo "Setting up Prometheus and Grafana..."
+                        # Placeholder: depends on your setup (K8s YAMLs or Docker Compose etc.)
+                    '''
+                }
+            }
+        }
     }
 
-    stage('Monitoring Info') {
-      steps {
-        echo "✅ Prometheus: http://<your-ec2-ip>:9090"
-        echo "✅ Grafana: http://<your-ec2-ip>:3000 (default admin/admin)"
-      }
+    post {
+        always {
+            cleanWs()
+        }
+        failure {
+            echo "Pipeline failed for project: ${PROJECT}"
+        }
+        success {
+            echo "Pipeline completed successfully for project: ${PROJECT}"
+        }
     }
-  }
-
-  post {
-    success {
-      echo "✅ Pipeline for ${PROJECT} completed successfully!"
-    }
-    failure {
-      echo "❌ Pipeline for ${PROJECT} failed! Check logs."
-    }
-    always {
-      cleanWs()
-    }
-  }
 }
 
