@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logout-deployment
+  labels:
+    app: logout
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logout
+  template:
+    metadata:
+      labels:
+        app: logout
+    spec:
+      containers:
+        - name: logout
+          image: <ECR_URL>/ppe-stock-management-3tier-logout:latest
+          ports:
+            - containerPort: 5002
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logout-service
+spec:
+  selector:
+    app: logout
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5002
+  type: LoadBalancer
+

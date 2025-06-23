@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: view-stock-deployment
+  labels:
+    app: view-stock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: view-stock
+  template:
+    metadata:
+      labels:
+        app: view-stock
+    spec:
+      containers:
+        - name: view-stock
+          image: <ECR_URL>/ppe-stock-management-3tier-view-stock:latest
+          ports:
+            - containerPort: 5001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: view-stock-service
+spec:
+  selector:
+    app: view-stock
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5001
+  type: LoadBalancer
+
