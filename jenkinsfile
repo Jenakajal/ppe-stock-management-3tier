@@ -2,40 +2,38 @@ pipeline {
     agent any
 
     environment {
-        PROJECT = "ppe-stock-management-3tier"
-        REGION = "ap-south-1"
-        ECR_REPO = "ppe-ecr"
+        AWS_REGION = 'us-east-1'
     }
 
-    options {
-        skipDefaultCheckout true
-    }
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Jenakajal/ppe-stock-management-3tier.git'
+            }
+        }
 
-    parameters {
-        booleanParam(name: 'ENABLE_SONARQUBE', defaultValue: true, description: 'Run SonarQube Analysis?')
-    }
+        stage('Terraform Init & Apply') {
+            steps {
+                dir('infrastructure/modules') {
+                    withCredentials([
+                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                    ]) {
+                        sh '''
+                            set -e
+                            set -x
+                            export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+                            export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
 
-    stage('Terraform Init & Apply') {
-    steps {
-        script {
-            dir('infrastructure/modules') {
-                withCredentials([
-                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
-                ]) {
-                    sh '''
-                        set -e
-                        set -x
-                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-
-                        terraform init
-                        terraform apply -auto-approve
-                    '''
+                            terraform init
+                            terraform apply -auto-approve
+                        '''
                     }
                 }
             }
         }
+
 
         stage('SonarQube Analysis') {
             when {
